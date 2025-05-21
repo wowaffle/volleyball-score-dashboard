@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>排球记分与轮转助手 V0.1</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #f7f9fc;
+      padding: 20px;
+      max-width: 1000px;
+      margin: auto;
+    }
+    .section {
+      background: white;
+      padding: 15px;
+      margin: 20px 0;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+    input, button, textarea {
+      font-family: inherit;
+      font-size: 14px;
+      margin: 4px;
+      padding: 5px 8px;
+    }
+    button {
+      background-color: #0077cc;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .scoreboard {
+      text-align: center;
+    }
+    .court-area {
+      display: flex;
+      justify-content: center;
+      gap: 40px;
+    }
+    .team-column {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .court {
+      display: grid;
+      grid-template-rows: repeat(3, 1fr);
+      grid-template-columns: repeat(2, 1fr);
+      gap: 5px;
+      margin-bottom: 10px;
+    }
+    .player-box {
+      background: white;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      width: 90px;
+      min-height: 36px;
+      text-align: center;
+      padding: 4px;
+      font-size: 12px;
+    }
+    .back-row {
+      border: 2px dashed #999 !important;
+    }
+    .highlight-server {
+      background-color: #d1eaff;
+      border: 2px solid #0077cc;
+    }
+    .disabled {
+      opacity: 0.6;
+      pointer-events: none;
+    }
+    pre {
+      background: #f0f0f0;
+      padding: 10px;
+      border-radius: 6px;
+      height: 150px;
+      overflow: auto;
+    }
+  </style>
+</head>
+<body>
+
+<h2>🏐 排球记分与轮转助手 V0.1</h2>
+
+<!-- 设置栏 -->
+<div class="section" id="setupSection">
+  队伍A名称：<input id="teamAName" value="A队" />
+  队伍B名称：<input id="teamBName" value="B队" />
+  |
+  比赛模式：
+  <button onclick="setMatchMode(3)" id="btnBO3">BO3</button>
+  <button onclick="setMatchMode(5)" id="btnBO5">BO5</button>
+  当前赛制：<span id="matchModeDisplay">未设置</span>
+  <br><br>
+  <button onclick="startMatch()">开始比赛</button>
+</div>
+
+<!-- 比分栏 -->
+<div class="section">
+  <div class="scoreboard">
+    <div style="font-size:16px;">当前局 <span id="setDisplay">1</span></div>
+    <div style="font-size:18px;">小局比分：<span id="setScores">0 : 0</span></div>
+    <div style="font-size:28px; margin-top:10px;">
+      <span id="teamALabel">A队</span> <span id="scoreA">0</span> : <span id="scoreB">0</span> <span id="teamBLabel">B队</span>
+    </div>
+  </div>
+  <div style="text-align:center;">
+    每局初始得分：
+    左侧 <input id="scoreAInit" type="number" value="0" style="width:60px" />
+    右侧 <input id="scoreBInit" type="number" value="0" style="width:60px" />
+    <button onclick="confirmInitScores()">确认</button>
+  </div>
+  <br>
+  <div style="text-align:center;">
+    <button onclick="score('A', 1)">左侧 +1</button>
+    <button onclick="score('A', -1)">左侧 -1</button>
+    |
+    <button onclick="score('B', 1)">右侧 +1</button>
+    <button onclick="score('B', -1)">右侧 -1</button>
+    <button onclick="undo()">撤销</button>
+  </div>
+</div>
+
+<!-- 工具栏 -->
+<div class="section" id="toolBar">
+  <button onclick="swapServe()">交换发球权</button>
+  <button onclick="swapCourt()">交换场地</button>
+  <button onclick="toggleTimer()">开始计时</button>
+  <span id="timerDisplay">时间：0秒</span>
+</div>
+
+<!-- 场地栏 -->
+<div class="section court-area">
+  <div class="team-column">
+    <h4>左侧</h4>
+    <div class="court" id="courtA"></div>
+    <input id="subOutA" placeholder="换下球员">
+    <input id="subInA" placeholder="换上球员">
+    <button onclick="substitute('A')">换人</button>
+  </div>
+  <div class="team-column">
+    <h4>右侧</h4>
+    <div class="court" id="courtB"></div>
+    <input id="subOutB" placeholder="换下球员">
+    <input id="subInB" placeholder="换上球员">
+    <button onclick="substitute('B')">换人</button>
+  </div>
+</div>
+
+<!-- 得分记录 -->
+<div class="section">
+  <h4>得分记录</h4>
+  <pre id="exportBox"></pre>
+</div>
+
+<script>
+let match = {
+  scores: { A: 0, B: 0 },
+  players: { A: Array(6).fill(''), B: Array(6).fill('') },
+  rotation: { A: [0,1,2,3,4,5], B: [0,1,2,3,4,5] },
+  servingTeam: 'A',
+  currentServer: { A: '', B: '' },
+  serverScores: { A: {}, B: {} },
+  history: [],
+  setScore: { A: 0, B: 0 },
+  totalPoints: 1,
+  currentSet: 1,
+  maxSets: 3,
+  setWinTarget: 2
+};
+
+let timerActive = false;
+let timerInterval;
+let elapsedTime = 0;
+
+function setMatchMode(maxSets) {
+  match.maxSets = maxSets;
+  match.setWinTarget = Math.ceil(maxSets / 2);
+  document.getElementById('matchModeDisplay').innerText = maxSets === 3 ? 'BO3（三局两胜）' : 'BO5（五局三胜）';
+}
+
+function confirmInitScores() {
+  document.getElementById('scoreAInit').disabled = true;
+  document.getElementById('scoreBInit').disabled = true;
+  match.scores.A = parseInt(document.getElementById('scoreAInit').value || 0);
+  match.scores.B = parseInt(document.getElementById('scoreBInit').value || 0);
+  updateUI();
+}
+
+function startMatch() {
+  const aName = document.getElementById('teamAName').value;
+  const bName = document.getElementById('teamBName').value;
+
+  match.players.A = Array(6).fill('').map((_, i) => `${aName}${i+1}`);
+  match.players.B = Array(6).fill('').map((_, i) => `${bName}${i+1}`);
+
+  match.servingTeam = 'A';  // 默认左侧发球
+  const idx = match.rotation.A[0];
+  match.currentServer.A = match.players.A[idx];
+
+  match.currentSet = 1;
+  match.setScore = { A: 0, B: 0 };
+  match.history = [];
+  updateUI();
+}
+
+function score(team, value) {
+  if (!timerActive) {
+    alert("请先点击计时器开始比赛！");
+    return;
+  }
+  match.history.push({
+    scores: { ...match.scores },
+    rotation: { A: [...match.rotation.A], B: [...match.rotation.B] },
+    servingTeam: match.servingTeam,
+    currentServer: { ...match.currentServer },
+    serverScores: JSON.parse(JSON.stringify(match.serverScores)),
+    totalPoints: match.totalPoints
+  });
+  if (match.history.length > 5) match.history.shift();
+
+  match.scores[team] += value;
+  if (match.scores[team] < 0) match.scores[team] = 0;
+
+  if (team !== match.servingTeam) {
+    match.servingTeam = team;
+    rotate(team);
+  }
+
+  const idx = match.rotation[team][0];
+  const player = match.players[team][idx];
+  match.currentServer[team] = player;
+
+  if (!match.serverScores[team][player]) match.serverScores[team][player] = [];
+  if (value > 0) {
+  const currentPoint = match.scores[team];  // 当前队伍的第几分
+  match.serverScores[team][player].push(currentPoint);
+}
+
+  updateUI();
+  checkSetWin();
+}
+
+function rotate(team) {
+  match.rotation[team].unshift(match.rotation[team].pop());
+}
+
+function undo() {
+  if (match.history.length > 0) {
+    const last = match.history.pop();
+    Object.assign(match, last);
+    updateUI();
+  }
+}
+
+function substitute(team) {
+  const outName = document.getElementById('subOut' + team).value.trim();
+  const inName = document.getElementById('subIn' + team).value.trim();
+  if (!outName || !inName) return;
+  const idx = match.players[team].findIndex(name => name === outName);
+  if (idx >= 0) {
+    match.players[team][idx] = outName + '（' + inName + '）';
+    updateUI();
+  }
+}
+
+function renderTeam(team) {
+  const court = document.getElementById('court' + team);
+  court.innerHTML = '';
+  const players = match.players[team];
+  const rot = match.rotation[team];
+  const server = match.currentServer[team];
+
+  let order, labelMap, backRowIndexes;
+
+  if (team === 'A') {
+    order = [4, 3, 5, 2, 0, 1]; // 实际排布顺序
+    labelMap = ['5号位', '4号位', '6号位', '3号位', '1号位', '2号位'];
+    backRowIndexes = [5, 4, 0];
+  } else {
+    order = [1, 0, 2, 5, 3, 4];
+    labelMap = ['2号位', '1号位', '3号位', '6号位', '4号位', '5号位'];
+    backRowIndexes = [0, 4, 5];
+  }
+
+  for (let i = 0; i < 6; i++) {
+    const index = order[i];
+    const div = document.createElement('div');
+    div.className = 'player-box';
+    if (backRowIndexes.includes(index)) div.classList.add('back-row');
+    div.innerHTML = `<div style="font-size:12px;color:gray;">${labelMap[i]}</div><div>${players[rot[index]]}</div>`;
+    if (players[rot[index]] === server && match.servingTeam === team) {
+      div.classList.add('highlight-server');
+    }
+    div.contentEditable = true;
+    div.addEventListener('blur', () => {
+      const newName = div.innerText.trim();
+      if (newName) players[rot[index]] = newName;
+    });
+    court.appendChild(div);
+  }
+}
+
+
+function updateUI() {
+  document.getElementById('scoreA').innerText = match.scores.A;
+  document.getElementById('scoreB').innerText = match.scores.B;
+  document.getElementById('setDisplay').innerText = match.currentSet;
+  document.getElementById('setScores').innerText = `${match.setScore.A} : ${match.setScore.B}`;
+  document.getElementById('teamALabel').innerText = document.getElementById('teamAName').value;
+  document.getElementById('teamBLabel').innerText = document.getElementById('teamBName').value;
+  renderTeam('A');
+  renderTeam('B');
+}
+
+function checkSetWin() {
+  const A = match.scores.A;
+  const B = match.scores.B;
+  const isFinalSet = match.maxSets === 5 && match.currentSet === 5;
+  const target = isFinalSet ? 15 : 25;
+  if ((A >= target || B >= target) && Math.abs(A - B) >= 2) {
+    const winner = A > B ? 'A' : 'B';
+    match.setScore[winner]++;
+    const winnerName = winner === 'A' ? document.getElementById('teamAName').value : document.getElementById('teamBName').value;
+    appendExport(`【第${match.currentSet}局】${winnerName} 胜 (${A}:${B})`);
+    Object.entries(match.serverScores).forEach(([team, players]) => {
+      Object.entries(players).forEach(([player, points]) => {
+        if (points.length > 0) {
+          appendExport(`${player}：${points.join('、')}`);
+        }
+      });
+    });
+    alert(`${winnerName} 赢得第 ${match.currentSet} 局！`);
+    document.getElementById('scoreAInit').disabled = false;
+    document.getElementById('scoreBInit').disabled = false;
+    clearInterval(timerInterval);
+    timerActive = false;
+    match.currentSet++;
+    match.scores = {
+      A: parseInt(document.getElementById('scoreAInit').value || 0),
+      B: parseInt(document.getElementById('scoreBInit').value || 0)
+    };
+    match.serverScores = { A: {}, B: {} };
+    updateUI();
+  }
+}
+
+function appendExport(text) {
+  document.getElementById('exportBox').innerText += text + '\n';
+}
+
+function swapServe() {
+  match.servingTeam = (match.servingTeam === 'A' ? 'B' : 'A');
+  updateUI();
+}
+
+function swapCourt() {
+  [match.players.A, match.players.B] = [match.players.B, match.players.A];
+  [match.rotation.A, match.rotation.B] = [match.rotation.B, match.rotation.A];
+  [match.scores.A, match.scores.B] = [match.scores.B, match.scores.A];
+  [match.setScore.A, match.setScore.B] = [match.setScore.B, match.setScore.A];
+  updateUI();
+}
+
+function toggleTimer() {
+  timerActive = !timerActive;
+  if (timerActive) {
+    elapsedTime = 0;
+    timerInterval = setInterval(() => {
+      elapsedTime++;
+      document.getElementById('timerDisplay').innerText = `时间：${elapsedTime}秒`;
+    }, 1000);
+  } else {
+    clearInterval(timerInterval);
+  }
+}
+</script>
+
+</body>
+</html>
